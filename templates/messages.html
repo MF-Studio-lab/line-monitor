@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}訊息日誌{% endblock %}
+{% block content %}
+
+<div class="bg-white rounded-lg shadow">
+    <div class="px-5 py-3 border-b flex flex-wrap items-center gap-3">
+        <h2 class="font-bold text-gray-700">訊息日誌</h2>
+        <input type="date" id="date-filter" class="ml-auto px-3 py-1 border rounded text-sm">
+        <select id="status-filter" class="px-3 py-1 border rounded text-sm">
+            <option value="">全部狀態</option>
+            <option value="pending">等待中</option>
+            <option value="reminded_1">已提醒</option>
+            <option value="reminded_2">已升級</option>
+            <option value="escalated">嚴重延遲</option>
+            <option value="resolved">已回覆</option>
+        </select>
+        <input type="text" id="search-input" placeholder="搜尋訊息..." class="px-3 py-1 border rounded text-sm w-48">
+    </div>
+
+    <div id="message-list" class="divide-y">
+        {% for msg in messages %}
+        <div class="p-4 hover:bg-gray-50" data-status="{{ msg.status }}">
+            <div class="flex items-start gap-3">
+                <div class="flex-shrink-0 w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold">
+                    {{ msg.user_name[:1] if msg.user_name else '?' }}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <!-- Header -->
+                    <div class="flex items-center gap-3 mb-1">
+                        <span class="font-medium text-gray-800">{{ msg.user_name or '未知用戶' }}</span>
+                        <span class="text-xs text-gray-400">{{ msg.formatted_time }}</span>
+                        {% if msg.status == 'pending' %}
+                            <span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">等待中</span>
+                        {% elif msg.status == 'reminded_1' %}
+                            <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded">已提醒</span>
+                        {% elif msg.status == 'reminded_2' %}
+                            <span class="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded">已升級</span>
+                        {% elif msg.status == 'escalated' %}
+                            <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded">嚴重延遲</span>
+                        {% elif msg.status == 'resolved' %}
+                            <span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">已回覆</span>
+                            {% if msg.reply_by_name %}
+                            <span class="text-xs text-gray-400">回覆者: {{ msg.reply_by_name }}</span>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+
+                    <!-- 客戶訊息 -->
+                    <div class="bg-green-50 rounded-lg px-3 py-2 mb-2">
+                        <p class="text-sm text-gray-700">{{ msg.message_text }}</p>
+                    </div>
+
+                    <!-- 回覆內容 (如有) -->
+                    {% if msg.reply_text %}
+                    <div class="bg-blue-50 rounded-lg px-3 py-2 mb-2">
+                        <p class="text-sm text-gray-700">{{ msg.reply_text }}</p>
+                    </div>
+                    {% endif %}
+
+                    <!-- AI 草稿 -->
+                    {% if msg.ai_draft and msg.status != 'resolved' %}
+                    <div class="border border-blue-200 rounded-lg p-3 bg-blue-50/50">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs font-bold text-blue-600">AI 建議回覆</span>
+                            <button onclick="regenDraft({{ msg.id }})" class="text-xs text-blue-500 hover:text-blue-700">重新生成</button>
+                        </div>
+                        <p class="text-sm text-gray-700" id="draft-{{ msg.id }}">{{ msg.ai_draft }}</p>
+                        <div class="flex gap-2 mt-2">
+                            <button onclick="sendDraft({{ msg.id }})" class="text-xs bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600">確認發送</button>
+                            <button onclick="editDraft({{ msg.id }})" class="text-xs bg-gray-200 px-3 py-1 rounded hover:bg-gray-300">編輯後發送</button>
+                            <button onclick="markResolved({{ msg.id }})" class="text-xs bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">標記已處理</button>
+                        </div>
+                    </div>
+                    {% elif msg.status != 'resolved' %}
+                    <button onclick="genDraft({{ msg.id }})" class="text-xs bg-gray-300 px-3 py-1 rounded hover:bg-gray-400">生成 AI 草稿</button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="p-8 text-center text-gray-400">暫無訊息記錄</div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- 分頁 -->
+{% if total_pages > 1 %}
+<div class="flex justify-center gap-2 mt-4">
+    {% for p in range(1, total_pages + 1) %}
+    <a href="/messages?page={{ p }}" class="px-3 py-1 rounded {% if p == current_page %}bg-green-600 text-white{% else %}bg-white border hover:bg-gray-50{% endif %}">{{ p }}</a>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}
