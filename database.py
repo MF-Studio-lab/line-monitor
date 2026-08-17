@@ -64,6 +64,14 @@ def init_db():
         value   TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS heartbeat (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        beat_id     TEXT,
+        source      TEXT DEFAULT 'patrol',
+        checked_at  TEXT NOT NULL,
+        status      TEXT DEFAULT 'ok'
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
     CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
     CREATE INDEX IF NOT EXISTS idx_messages_message_time ON messages(message_time);
@@ -102,8 +110,8 @@ def get_message(msg_id):
     return dict(row) if row else None
 
 
-def get_messages(status=None, date_from=None, date_to=None, search=None, limit=200):
-    """查詢訊息清單（可依狀態、日期、關鍵字篩選）"""
+def get_messages(status=None, date_from=None, date_to=None, search=None, limit=200, offset=0):
+    """查詢訊息清單（可依狀態、日期、關鍵字篩選、分頁）"""
     query = "SELECT * FROM messages WHERE 1=1"
     params = []
     if status:
@@ -118,12 +126,34 @@ def get_messages(status=None, date_from=None, date_to=None, search=None, limit=2
     if search:
         query += " AND (message_text LIKE ? OR user_name LIKE ?)"
         params.extend([f"%{search}%", f"%{search}%"])
-    query += " ORDER BY message_time DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY message_time DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     conn = get_connection()
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def count_messages(status=None, date_from=None, date_to=None, search=None):
+    """回傳符合篩選條件的訊息總數（供分頁）"""
+    query = "SELECT COUNT(*) FROM messages WHERE 1=1"
+    params = []
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    if date_from:
+        query += " AND date(message_time) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        query += " AND date(message_time) <= date(?)"
+        params.append(date_to)
+    if search:
+        query += " AND (message_text LIKE ? OR user_name LIKE ?)"
+        params.extend([f"%{search}%", f"%{search}%"])
+    conn = get_connection()
+    count = conn.execute(query, params).fetchone()[0]
+    conn.close()
+    return count
 
 
 def get_pending_messages():
@@ -370,3 +400,166 @@ def delete_setting(key):
     conn.execute("DELETE FROM settings WHERE key = ?", (key,))
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat CRUD
+# ---------------------------------------------------------------------------
+
+def record_heartbeat(source="patrol", beat_id=None):
+    """記錄一次心跳"""
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO heartbeat (beat_id, source, checked_at, status)
+           VALUES (?, ?, ?, 'ok')""",
+        (beat_id, source, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_last_heartbeat(source="patrol"):
+    """取得最近一次心跳"""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM heartbeat WHERE source = ? ORDER BY checked_at DESC LIMIT 1",
+        (source,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# SLA / 統計分析
+# ---------------------------------------------------------------------------
+
+def _parse_dt(text):
+    """解析 ISO datetime，失敗回傳 None"""
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_mttr(days=30):
+    """
+    平均回覆時間 (MTTR - Mean Time To Reply)
+    只計算 resolved 且同時有 message_time 與 reply_time 的訊息
+    回傳 (avg_hours, count)
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT message_time, reply_time FROM messages
+           WHERE status = 'resolved' AND reply_time IS NOT NULL
+             AND date(message_time) >= date('now', ?)""",
+        (f"-{days} days",),
+    ).fetchall()
+    conn.close()
+
+    total_secs = 0
+    count = 0
+    for r in rows:
+        mt = _parse_dt(r["message_time"])
+        rt = _parse_dt(r["reply_time"])
+        if mt and rt and rt > mt:
+            total_secs += (rt - mt).total_seconds()
+            count += 1
+    avg_hours = round(total_secs / 3600 / count, 2) if count else 0
+    return avg_hours, count
+
+
+def get_escalated_stats(days=30):
+    """
+    延遲統計
+    回傳 dict: {escalated_count, escalated_rate, categories: {類別名: 次數}}
+    類別透過找出被延遲訊息的文字，套用規則分類。
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT message_text FROM messages
+           WHERE escalated_time IS NOT NULL
+             AND date(escalated_time) >= date('now', ?)""",
+        (f"-{days} days",),
+    ).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM messages WHERE date(message_time) >= date('now', ?)",
+        (f"-{days} days",),
+    ).fetchone()[0]
+    conn.close()
+
+    category_counts = _categorize_rows(rows)
+    return {
+        "escalated_count": len(rows),
+        "escalated_rate": round(len(rows) / total * 100, 1) if total else 0,
+        "categories": category_counts,
+    }
+
+
+_CATEGORY_RULES = [
+    ("保固/維修", ("保固", "維修", "故障", "壞", "維修費")),
+    ("出貨/交期", ("出貨", "交期", "到貨", "運送", "遲到")),
+    ("價格/報價", ("價格", "報價", "多少錢", "費用", "折扣")),
+    ("規格/技術", ("規格", "技術", "規格書", "參數", "馬力", "電壓")),
+    ("安裝/操作", ("安裝", "操作", "如何使用", "說明書", "怎麼用")),
+    ("其他", None),
+]
+
+
+def _categorize_rows(rows):
+    """依關鍵字規則分類訊息文字，回傳 {類別: 次數}"""
+    cats = {name: 0 for name, _ in _CATEGORY_RULES}
+    for r in rows:
+        text = (r["message_text"] or "").lower()
+        matched = False
+        for name, keywords in _CATEGORY_RULES:
+            if keywords and any(k.lower() in text for k in keywords):
+                cats[name] += 1
+                matched = True
+                break
+        if not matched:
+            cats["其他"] += 1
+    return cats
+
+
+def get_resolved_with_times(days=30):
+    """取得已回覆訊息的 message_time/reply_time（供報表趨勢用）"""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT message_time, reply_time FROM messages
+           WHERE status = 'resolved' AND reply_time IS NOT NULL
+             AND date(message_time) >= date('now', ?)""",
+        (f"-{days} days",),
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        mt = _parse_dt(r["message_time"])
+        rt = _parse_dt(r["reply_time"])
+        if mt and rt and rt > mt:
+            result.append({"lag_hours": round((rt - mt).total_seconds() / 3600, 2)})
+    return result
+
+
+def get_message_trend(days=7):
+    """取得每日訊息數與已回覆數（供趨勢圖）"""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT date(message_time) as d,
+                  COUNT(*) as cnt,
+                  SUM(CASE WHEN status='resolved' AND reply_time IS NOT NULL THEN 1 ELSE 0 END) as replied
+           FROM messages
+           WHERE message_time >= date('now', ?)
+           GROUP BY date(message_time) ORDER BY d ASC""",
+        (f"-{days} days",),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "date": r["d"],
+            "count": r["cnt"],
+            "replied": r["replied"] or 0,
+        }
+        for r in rows
+    ]

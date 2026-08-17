@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}SLA 報表{% endblock %}
+{% block content %}
+
+<div class="max-w-6xl mx-auto space-y-6">
+    <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold text-gray-800">SLA 報表</h1>
+        <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-500">期間：</span>
+            <select id="sla-days" class="px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400" onchange="loadSla()">
+                <option value="7">7 天</option>
+                <option value="30" selected>30 天</option>
+                <option value="90">90 天</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- 核心指標 -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-white rounded-lg shadow p-5 border-l-4 border-blue-400">
+            <div class="text-sm text-gray-500 mb-1">平均回覆時間 (MTTR)</div>
+            <div class="text-3xl font-bold text-blue-600" id="sla-mttr">--</div>
+            <div class="text-xs text-gray-400 mt-1" id="sla-mttr-count"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-5 border-l-4 border-orange-400">
+            <div class="text-sm text-gray-500 mb-1">嚴重延遲數</div>
+            <div class="text-3xl font-bold text-orange-600" id="sla-escalated">--</div>
+            <div class="text-xs text-gray-400 mt-1">超過升級時間未回覆</div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-5 border-l-4 border-red-400">
+            <div class="text-sm text-gray-500 mb-1">延遲率</div>
+            <div class="text-3xl font-bold text-red-600" id="sla-rate">--</div>
+            <div class="text-xs text-gray-400 mt-1">延遲訊息 / 總訊息</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- 最常被延遲的問題類別 -->
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="font-bold text-gray-700 mb-4">最常被延遲的問題類別</h2>
+            <canvas id="categoryChart" height="240"></canvas>
+        </div>
+        <!-- 每日平均回覆時長 -->
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="font-bold text-gray-700 mb-4">已回覆訊息延遲分布</h2>
+            <canvas id="lagChart" height="240"></canvas>
+        </div>
+    </div>
+
+    <p class="text-xs text-gray-400">指標來源：訊息日誌中 status=resolved 且有 reply_time 的紀錄。類別由延遲訊息文字關鍵字自動歸類。</p>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadSla() {
+    const days = document.getElementById('sla-days').value;
+    const res = await fetch(`/api/sla?days=${days}`);
+    const data = await res.json();
+
+    // 核心指標
+    document.getElementById('sla-mttr').textContent = data.mttr_hours + ' 小時';
+    document.getElementById('sla-mttr-count').textContent = `樣本 ${data.mttr_count} 筆已回覆訊息`;
+    document.getElementById('sla-escalated').textContent = data.escalated.escalated_count;
+    document.getElementById('sla-rate').textContent = data.escalated.escalated_rate + '%';
+
+    // 類別圖
+    const cats = data.escalated.categories;
+    const catLabels = Object.keys(cats).sort((a,b) => cats[b]-cats[a]);
+    const catData = catLabels.map(k => cats[k]);
+    renderCategory(catLabels, catData);
+}
+
+function renderCategory(labels, values) {
+    const ctx = document.getElementById('categoryChart');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: '嚴重延遲次數',
+                data: values,
+                backgroundColor: 'rgba(249,115,22,0.7)',
+                borderColor: '#ea580c',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            plugins: { legend: { display: false }, title: { display: false } },
+            scales: { x: { beginAtZero: true } }
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', loadSla);
+</script>
+{% endblock %}

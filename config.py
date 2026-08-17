@@ -31,6 +31,37 @@ DEFAULT_CONFIG = {
         "auto_send": False,
         "company_info": "GREEN INDUSTRY CO., LTD. 專注於綠色產業解決方案，提供高品質的環保產品與專業諮詢服務。",
     },
+    "rag": {
+        "enabled": False,
+        "kb_path": "",
+        "top_k": 3,
+    },
+    "notify_channels": {
+        "line": {"enabled": True},
+        "discord": {
+            "enabled": False,
+            "webhook_url": "",
+        },
+        "telegram": {
+            "enabled": False,
+            "bot_token": "",
+            "chat_id": "",
+        },
+        "email": {
+            "enabled": False,
+            "smtp_host": "",
+            "smtp_port": 465,
+            "smtp_user": "",
+            "smtp_password": "",
+            "use_tls": True,
+            "from_email": "",
+            "to_emails": [],
+        },
+    },
+    "heartbeat": {
+        "enabled": True,
+        "max_stale_minutes": 60,
+    },
     "company": {
         "name": "GREEN INDUSTRY CO., LTD.",
         "display_name": "綠色產業股份有限公司",

@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 import database as db
 import line_api
 import ai_service
+import notify
+import heartbeat
 from config import load_config
 
 
@@ -42,12 +44,16 @@ def _check_timeout(msg, first_hr, second_hr, esc_hr):
 def patrol():
     """
     主巡檢函數
+    0. 記錄心跳 (heartbeat)
     1. 檢查所有待回覆訊息是否超時
     2. 建立批次 (batch_id) 將本次巡檢的超時訊息合併成 1 則通知
     3. 通知操作人員 (第一次提醒含 AI 草稿摘要)
-    4. 管理員收到升級通知
+    4. 管理員收到升級通知（依設定送往多通道）
     回傳巡檢摘要 dict
     """
+    # 記錄心跳，供 heartbeat.py 監控判斷
+    heartbeat.record_patrol_beat()
+
     config = load_config()
     notif_cfg = config.get("notification", {})
     first_hr = notif_cfg.get("first_reminder_hours", 1)
@@ -133,6 +139,7 @@ def patrol():
         msg_ids = [m["id"] for m in escalated_msgs]
         summary = ai_service.summarize_messages(escalated_msgs)
         admins = db.get_admins()
+        admin_ids = [a["user_id"] for a in admins]
 
         content = (
             f"【嚴重延遲 — {len(escalated_msgs)} 條訊息已超過 {esc_hr} 小時未回覆】\n"
@@ -140,10 +147,13 @@ def patrol():
             f"{summary}\n\n"
             f"請管理員立即介入處理。"
         )
-        for admin in admins:
-            success, _ = line_api.send_message(admin["user_id"], content)
-            db.add_notification_log(batch_id, "line", admin["user_id"], content, msg_ids)
-            sent_notifications += 1
+        # 高優先級：管理員 LINE + 其他已啟用通道，確保不看 LINE 也能收到
+        results = notify.notify_all(content, targets=admin_ids)
+        for a in admins:
+            db.add_notification_log(
+                batch_id, "line", a["user_id"], content, msg_ids
+            )
+        sent_notifications += len(results)
 
         for m in escalated_msgs:
             db.update_message_status(m["id"], "escalated")

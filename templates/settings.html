@@ -8,7 +8,7 @@
 <div class="bg-white rounded-lg shadow">
     <div class="px-5 py-3 border-b">
         <h2 class="font-bold text-gray-700 flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full {% if settings.line_connected %}bg-green-500{% else %}bg-red-400{% endif %}"></span>
+            <span class="w-2 h-2 rounded-full {% if settings.line.channel_access_token %}bg-green-500{% else %}bg-red-400{% endif %}"></span>
             LINE 連接設定
         </h2>
     </div>
@@ -16,7 +16,7 @@
         <div>
             <label class="text-sm font-medium text-gray-600 block mb-1">Channel Access Token</label>
             <div class="flex gap-2">
-                <input type="password" id="line_token" value="{{ settings.line_token or '' }}" placeholder="從 LINE Official Account Manager 取得"
+                <input type="password" id="line_token" value="{{ settings.line.channel_access_token or '' }}" placeholder="從 LINE Official Account Manager 取得"
                     class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
                 <button onclick="testLine()" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">測試連接</button>
             </div>
@@ -24,7 +24,7 @@
         </div>
         <div>
             <label class="text-sm font-medium text-gray-600 block mb-1">Webhook URL</label>
-            <input type="text" id="webhook_url" value="{{ settings.webhook_url or '' }}" placeholder="https://xxx.ngrok.io/webhook"
+            <input type="text" id="webhook_url" value="{{ settings.line.webhook_url or '' }}" placeholder="https://xxx.ngrok.io/webhook"
                 class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
             <p class="text-xs text-gray-400 mt-1">設定 ngrok 或 Cloudflare Tunnel 取得公網位址後填入</p>
         </div>
@@ -38,42 +38,111 @@
         <h2 class="font-bold text-gray-700">通知設定</h2>
     </div>
     <div class="p-5 space-y-4">
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-3 gap-4">
             <div>
-                <label class="text-sm font-medium text-gray-600 block mb-1">第1次提醒 (小時)</label%
-                <input type="number" id="reminder_1" value="{{ settings.reminder_1 or 1 }}" min="1" max="24"
+                <label class="text-sm font-medium text-gray-600 block mb-1">第1次提醒 (小時)</label>
+                <input type="number" id="reminder_1" value="{{ settings.notification.first_reminder_hours or 1 }}" min="1" max="24"
                     class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
                 <p class="text-xs text-gray-400">通知操作人員</p>
             </div>
             <div>
                 <label class="text-sm font-medium text-gray-600 block mb-1">第2次升級 (小時)</label>
-                <input type="number" id="reminder_2" value="{{ settings.reminder_2 or 3 }}" min="1" max="48"
+                <input type="number" id="reminder_2" value="{{ settings.notification.second_reminder_hours or 3 }}" min="1" max="48"
                     class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
                 <p class="text-xs text-gray-400">通知管理員</p>
+            </div>
+            <div>
+                <label class="text-sm font-medium text-gray-600 block mb-1">第3次升級 (小時)</label>
+                <input type="number" id="reminder_3" value="{{ settings.notification.escalation_hours or 6 }}" min="1" max="72"
+                    class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <p class="text-xs text-gray-400">嚴重延遲警報</p>
             </div>
         </div>
         <div class="grid grid-cols-2 gap-4">
             <div>
-                <label class="text-sm font-medium text-gray-600 block mb-1">第3次升級 (小時)</label>
-                <input type="number" id="reminder_3" value="{{ settings.reminder_3 or 6 }}" min="1" max="72"
-                    class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
-                <p class="text-xs text-gray-400">嚴重延遲警報</p>
-            </div>
-            <div>
                 <label class="text-sm font-medium text-gray-600 block mb-1">巡檢間隔 (分鐘)</label>
-                <input type="number" id="patrol_interval" value="{{ settings.patrol_interval or 15 }}" min="5" max="60"
+                <input type="number" id="patrol_interval" value="{{ settings.notification.patrol_interval_minutes or 15 }}" min="5" max="60"
                     class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+            </div>
+            <div class="flex items-end">
+                <label class="flex items-center gap-2 text-sm mb-2">
+                    <input type="checkbox" id="suppress_enabled" {% if settings.notification.suppression_enabled %}checked{% endif %} class="rounded">
+                    <span>通知抑制（同一訊息不重複通知）</span>
+                </label>
             </div>
         </div>
-        <div class="space-y-2">
-            <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" id="suppress_enabled" {% if settings.suppress_enabled %}checked{% endif %} class="rounded">
-                <span>通知抑制（同一訊息不重複通知）</span>
+    </div>
+</div>
+
+<!-- 通知通道多樣化 -->
+<div class="bg-white rounded-lg shadow">
+    <div class="px-5 py-3 border-b">
+        <h2 class="font-bold text-gray-700">通知通道（嚴重延遲/心跳警報）</h2>
+    </div>
+    <div class="p-5 space-y-5">
+        <p class="text-xs text-gray-400">enabled 的通道會在「嚴重延遲」與「心跳異常」時發送高優先級警報，確保管理員不看 LINE 也能收到。</p>
+
+        <!-- LINE -->
+        <div class="space-y-2 p-4 bg-gray-50 rounded">
+            <label class="flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" id="ch_line_enabled" {% if settings.notify_channels.line.enabled %}checked{% endif %} class="rounded">
+                LINE（管理員 push）
             </label>
-            <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" id="batch_enabled" {% if settings.batch_enabled %}checked{% endif %} class="rounded">
-                <span>批次彙整（多條訊息合併成1則通知）</span>
+        </div>
+
+        <!-- Discord -->
+        <div class="space-y-2 p-4 bg-gray-50 rounded">
+            <label class="flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" id="ch_discord_enabled" {% if settings.notify_channels.discord.enabled %}checked{% endif %} class="rounded">
+                Discord（Webhook）
             </label>
+            <div class="flex gap-2">
+                <input type="text" id="discord_webhook" value="{{ settings.notify_channels.discord.webhook_url or '' }}" placeholder="https://discord.com/api/webhooks/..."
+                    class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <button onclick="testChannel('discord')" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">測試</button>
+            </div>
+        </div>
+
+        <!-- Telegram -->
+        <div class="space-y-2 p-4 bg-gray-50 rounded">
+            <label class="flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" id="ch_telegram_enabled" {% if settings.notify_channels.telegram.enabled %}checked{% endif %} class="rounded">
+                Telegram（Bot）
+            </label>
+            <div class="flex gap-2">
+                <input type="text" id="telegram_token" value="{{ settings.notify_channels.telegram.bot_token or '' }}" placeholder="Bot Token"
+                    class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <input type="text" id="telegram_chat_id" value="{{ settings.notify_channels.telegram.chat_id or '' }}" placeholder="Chat ID"
+                    class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <button onclick="testChannel('telegram')" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">測試</button>
+            </div>
+        </div>
+
+        <!-- Email -->
+        <div class="space-y-2 p-4 bg-gray-50 rounded">
+            <label class="flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" id="ch_email_enabled" {% if settings.notify_channels.email.enabled %}checked{% endif %} class="rounded">
+                Email（SMTP）
+            </label>
+            <div class="grid grid-cols-2 gap-2">
+                <input type="text" id="smtp_host" value="{{ settings.notify_channels.email.smtp_host or '' }}" placeholder="SMTP 主機"
+                    class="px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <input type="number" id="smtp_port" value="{{ settings.notify_channels.email.smtp_port or 465 }}" placeholder="Port"
+                    class="px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <input type="text" id="smtp_user" value="{{ settings.notify_channels.email.smtp_user or '' }}" placeholder="帳號"
+                    class="px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <input type="password" id="smtp_password" value="{{ settings.notify_channels.email.smtp_password or '' }}" placeholder="密碼"
+                    class="px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <input type="text" id="smtp_from" value="{{ settings.notify_channels.email.from_email or '' }}" placeholder="寄件信箱"
+                    class="px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <input type="text" id="smtp_to" value="{{ settings.notify_channels.email.to_emails|join(',') }}" placeholder="收件信箱(逗號分隔)"
+                    class="px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+            </div>
+            <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" id="smtp_tls" {% if settings.notify_channels.email.use_tls %}checked{% endif %} class="rounded">
+                使用 SSL/TLS
+            </label>
+            <div><button onclick="testChannel('email')" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">測試 Email</button></div>
         </div>
     </div>
 </div>
@@ -119,27 +188,70 @@
     </div>
 </div>
 
-<!-- AI 回覆設定 -->
+<!-- AI 回覆設定 + RAG -->
 <div class="bg-white rounded-lg shadow">
     <div class="px-5 py-3 border-b">
-        <h2 class="font-bold text-gray-700">AI 回覆設定</h2>
+        <h2 class="font-bold text-gray-700">AI 回覆與知識庫 (RAG)</h2>
     </div>
     <div class="p-5 space-y-4">
         <div>
             <label class="text-sm font-medium text-gray-600 block mb-1">AI 模型</label>
-            <input type="text" id="ai_model" value="{{ settings.ai_model or 'glm-5.2' }}"
+            <input type="text" id="ai_model" value="{{ settings.ai.model or 'default' }}"
                 class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
-            <p class="text-xs text-gray-400">透過 Hermes CLI 呼叫，例如 glm-5.2, claude-sonnet-4</p>
+            <p class="text-xs text-gray-400">透過 Hermes CLI 呼叫，例如 default, glm-5.2, claude-sonnet-4</p>
         </div>
         <div>
             <label class="text-sm font-medium text-gray-600 block mb-1">公司資訊（AI 回覆參考）</label>
             <textarea id="company_info" rows="3"
-                class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">{{ settings.company_info or 'GREEN INDUSTRY CO., LTD. - PU灌注機製造商' }}</textarea>
+                class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">{{ settings.ai.company_info or 'GREEN INDUSTRY CO., LTD. - PU灌注機製造商' }}</textarea>
         </div>
         <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" id="auto_send" {% if settings.auto_send %}checked{% endif %} class="rounded">
+            <input type="checkbox" id="auto_send" {% if settings.ai.auto_send %}checked{% endif %} class="rounded">
             <span>自動發送（關閉=管理員確認後才發送）</span>
         </label>
+
+        <hr>
+        <h3 class="text-sm font-bold text-gray-600">知識庫 (RAG)</h3>
+        <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="rag_enabled" {% if settings.rag.enabled %}checked{% endif %} class="rounded">
+            <span>啟用知識庫檢索（AI 依過往解決方案回答）</span>
+        </label>
+        <div class="flex gap-2">
+            <input type="text" id="kb_path" value="{{ settings.rag.kb_path or '' }}" placeholder="/path/to/knowledge_base (資料夾或單檔 .txt/.md/.rst)"
+                class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+            <input type="number" id="rag_top_k" value="{{ settings.rag.top_k or 3 }}" min="1" max="10"
+                class="w-24 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400" title="回傳筆數 Top-K">
+        </div>
+        <div>
+            <label class="text-sm font-medium text-gray-600 block mb-1">測試知識庫檢索</label>
+            <div class="flex gap-2">
+                <input type="text" id="rag_test_q" placeholder="輸入問題，例如：PU灌注機保固多久？"
+                    class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+                <button onclick="testRag()" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">檢索測試</button>
+            </div>
+            <div id="rag-test-result" class="hidden mt-2 text-sm space-y-2"></div>
+        </div>
+        <p class="text-xs text-gray-400">知識庫支援目錄（掃描 .txt/.md/.rst）或單一文件，建議將常見問題/規格/解決方案整理成文件。</p>
+    </div>
+</div>
+
+<!-- 心跳監控 -->
+<div class="bg-white rounded-lg shadow">
+    <div class="px-5 py-3 border-b">
+        <h2 class="font-bold text-gray-700">心跳監控（Health Check）</h2>
+    </div>
+    <div class="p-5 space-y-4">
+        <p class="text-xs text-gray-400">巡檢 (patrol) 每次執行會記錄心跳。若超過上限時間未執行，判定監控系統可能失效，自動向指派的管理員發送高優先級警報。</p>
+        <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="hb_enabled" {% if settings.heartbeat.enabled %}checked{% endif %} class="rounded">
+            <span>啟用心跳監控</span>
+        </label>
+        <div>
+            <label class="text-sm font-medium text-gray-600 block mb-1">心跳過期上限 (分鐘)</label>
+            <input type="number" id="hb_max_stale" value="{{ settings.heartbeat.max_stale_minutes or 60 }}" min="5" max="1440"
+                class="w-48 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+            <p class="text-xs text-gray-400 mt-1">建議 ≥ 巡檢間隔的 4 倍。預設 60 分鐘（巡檢每 15 分鐘一次）。</p>
+        </div>
     </div>
 </div>
 

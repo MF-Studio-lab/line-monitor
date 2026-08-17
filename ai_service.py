@@ -5,6 +5,7 @@ ai_service.py - AI 草稿生成服務
 
 import subprocess
 import json
+import rag
 from config import load_config
 
 HERMES_CMD = "hermes"
@@ -51,11 +52,21 @@ def generate_draft(customer_name, message_text, context=""):
     config = load_config()
     company = config.get("company", {}).get("name", "GREEN INDUSTRY CO., LTD.")
     company_info = config.get("ai", {}).get("company_info", "")
+    rag_cfg = config.get("rag", {})
+
+    # RAG 知識庫檢索
+    kb_block = ""
+    if rag_cfg.get("enabled") and rag_cfg.get("kb_path"):
+        top_k = int(rag_cfg.get("top_k", 3))
+        results = rag.retrieve(message_text, rag_cfg.get("kb_path", ""), top_k)
+        ctx = rag.format_context(results)
+        if ctx:
+            kb_block = "知識庫參考資料（請據此回答具體問題，不要編造）：\n" + ctx
 
     prompt = f"""你是 {company} 的 LINE 客服專員，需要回覆客戶的 1:1 訊息。
 請用繁體中文撰寫一則禮貌、專業、簡潔的回覆訊息。
 公司資訊: {company_info}
-
+{kb_block}
 客戶名稱: {customer_name}
 客戶訊息: {message_text}
 {"上下文: " + context if context else ""}
@@ -63,7 +74,7 @@ def generate_draft(customer_name, message_text, context=""):
 請只輸出回覆內容，不要加多餘說明。回覆應該:
 1. 確認收到客戶的訊息
 2. 正面回應客戶的問題或需求
-3. 適當時可提及公司產品或服務
+3. 若有知識庫資料，優先依據知識庫內容回答規格/價格/技術類問題
 4. 保持親切專業的語氣
 """
 

@@ -14,6 +14,9 @@ import database as db
 import line_api
 import ai_service
 import patrol
+import notify
+import heartbeat
+import rag
 from config import load_config, save_config, validate_config
 
 app = Flask(__name__)
@@ -32,12 +35,19 @@ def dashboard():
     stats = db.get_stats()
     pending = db.get_pending_messages()
     config = load_config()
+    mttr_hours, mttr_count = db.get_mttr(days=30)
+    escalated = db.get_escalated_stats(days=30)
+    hb = heartbeat.check_heartbeat(force_alert=False)
     return render_template(
         "dashboard.html",
         stats=stats,
+        pending_msgs=pending,
         pending=pending,
         config=config,
         active_page="dashboard",
+        mttr=mttr_hours,
+        escalated_stats=escalated,
+        heartbeat_status=hb,
     )
 
 
@@ -50,6 +60,8 @@ def settings_page():
     all_contacts = db.get_contacts()
     return render_template(
         "settings.html",
+        settings=config,
+        contacts=all_contacts,
         config=config,
         admins=admins,
         operators=operators,
@@ -65,13 +77,26 @@ def messages_page():
     date_from = request.args.get("date_from", "")
     date_to = request.args.get("date_to", "")
     search = request.args.get("search", "")
+    PER_PAGE = 50
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
 
+    total = db.count_messages(
+        status=status_filter or None,
+        date_from=date_from or None,
+        date_to=date_to or None,
+        search=search or None,
+    )
+    total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     messages = db.get_messages(
         status=status_filter or None,
         date_from=date_from or None,
         date_to=date_to or None,
         search=search or None,
-        limit=500,
+        limit=PER_PAGE,
+        offset=(page - 1) * PER_PAGE,
     )
     config = load_config()
     return render_template(
@@ -83,6 +108,20 @@ def messages_page():
         search=search,
         config=config,
         active_page="messages",
+        page=page,
+        total_pages=total_pages,
+        current_page=page,
+    )
+
+
+@app.route("/reports")
+def reports_page():
+    """SLA 報表頁面"""
+    config = load_config()
+    return render_template(
+        "reports.html",
+        config=config,
+        active_page="reports",
     )
 
 
@@ -104,6 +143,72 @@ def api_health():
 def api_stats():
     """取得儀表板統計"""
     return jsonify(db.get_stats())
+
+
+@app.route("/api/stats/trend")
+def api_stats_trend():
+    """儀表板趨勢圖資料"""
+    trend = db.get_message_trend(days=7)
+    return jsonify({
+        "labels": [t["date"] for t in trend],
+        "messages": [t["count"] for t in trend],
+        "replies": [t["replied"] for t in trend],
+    })
+
+
+@app.route("/api/sla")
+def api_sla():
+    """SLA 報表：MTTR + 延遲類別統計"""
+    days = int(request.args.get("days", 30))
+    mttr_hours, mttr_count = db.get_mttr(days=days)
+    escalated = db.get_escalated_stats(days=days)
+    resolved_lags = db.get_resolved_with_times(days=days)
+    return jsonify({
+        "mttr_hours": mttr_hours,
+        "mttr_count": mttr_count,
+        "escalated": escalated,
+        "resolved_count": len(resolved_lags),
+    })
+
+
+@app.route("/api/heartbeat/status")
+def api_heartbeat_status():
+    """心跳狀態"""
+    return jsonify(heartbeat.check_heartbeat(force_alert=False))
+
+
+@app.route("/api/heartbeat/record", methods=["POST"])
+def api_heartbeat_record():
+    """手動記錄心跳（測試用）"""
+    heartbeat.record_patrol_beat()
+    return jsonify({"success": True})
+
+
+@app.route("/api/rag/search")
+def api_rag_search():
+    """測試知識庫檢索"""
+    config = load_config()
+    rag_cfg = config.get("rag", {})
+    query = request.args.get("q", "")
+    if not query or not rag_cfg.get("kb_path"):
+        return jsonify({"success": False, "message": "請輸入查詢或設定知識庫路徑"})
+    results = rag.retrieve(query, rag_cfg.get("kb_path", ""), int(rag_cfg.get("top_k", 3)))
+    return jsonify({
+        "success": True,
+        "results": [
+            {"source": name, "score": score, "snippet": snippet}
+            for name, score, snippet in results
+        ],
+    })
+
+
+@app.route("/api/notify/test", methods=["POST"])
+def api_notify_test():
+    """測試指定通知通道連線"""
+    data = request.get_json(silent=True) or {}
+    channel = data.get("channel", "")
+    success, message = notify.test_channel(channel)
+    return jsonify({"success": success, "message": message})
 
 
 @app.route("/api/messages")
@@ -199,14 +304,27 @@ def api_post_settings():
     """更新設定"""
     data = request.get_json(silent=True) or {}
     config = load_config()
-    # 深度合併
-    for section, values in data.items():
-        if section in config and isinstance(config[section], dict):
-            config[section].update(values)
+    # 深度合併（支援巢狀 section dict 與扁平欄位兩種格式）
+    for key, value in data.items():
+        if key in config and isinstance(config[key], dict) and isinstance(value, dict):
+            config[key].update(value)
         else:
-            config[section] = values
+            config[key] = value
     save_config(config)
-    return jsonify({"success": True, "config": config})
+    # 回傳扁平化設定，方便前端顯示
+    return jsonify({"success": True, "config": config, "flat": flatten_config(config)})
+
+
+def flatten_config(config, prefix=""):
+    """將巢狀設定扁平化，方便模板/前端欄位對應"""
+    flat = {}
+    for k, v in config.items():
+        key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            flat.update(flatten_config(v, key))
+        else:
+            flat[key] = v
+    return flat
 
 
 @app.route("/api/test-line", methods=["POST"])

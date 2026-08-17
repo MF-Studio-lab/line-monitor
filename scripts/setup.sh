@@ -55,11 +55,16 @@ sudo systemctl daemon-reload
 sudo systemctl enable line-monitor
 echo "  ✅ systemd 服務已建立 (line-monitor.service)"
 
-# 5. 設定 crontab 巡檢
-echo "[5/5] 設定 crontab 巡檢..."
-CRON_LINE="*/15 * * * * cd $PROJECT_DIR && venv/bin/python scripts/patrol_cron.py >> data/patrol.log 2>&1"
-( crontab -l 2>/dev/null | grep -v "patrol_cron.py" ; echo "$CRON_LINE" ) | crontab -
-echo "  ✅ crontab 已設定 (每15分鐘巡檢)"
+# 5. 設定 crontab 巡檢 + 心跳監控
+echo "[5/5] 設定 crontab 巡檢 + 心跳監控..."
+CRON_PATROL="*/15 * * * * cd $PROJECT_DIR && venv/bin/python scripts/patrol_cron.py >> data/patrol.log 2>&1"
+CRON_HEARTBEAT="*/5 * * * * cd $PROJECT_DIR && venv/bin/python scripts/heartbeat_cron.py >> data/heartbeat.log 2>&1"
+(
+    crontab -l 2>/dev/null | grep -v "patrol_cron.py" | grep -v "heartbeat_cron.py"
+    echo "$CRON_PATROL"
+    echo "$CRON_HEARTBEAT"
+) | crontab -
+echo "  ✅ crontab 已設定 (每15分鐘巡檢 + 每5分鐘心跳監控)"
 
 echo ""
 echo "========================================"
