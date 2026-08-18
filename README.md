@@ -58,6 +58,8 @@ resolved (已解決)
 
 ## 快速部署
 
+> 📖 **完整部署 SOP 請見 [`docs/DEPLOY.md`](docs/DEPLOY.md)** — 涵蓋從零到驗收的全部步驟（含 Hermes 安裝、LINE Webhook、疑難排解）。
+
 ### 前置需求
 
 - Linux / Raspberry Pi (Python 3.11+)
