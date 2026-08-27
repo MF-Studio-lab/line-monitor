@@ -6,6 +6,7 @@ Port: 8080
 
 import json
 import os
+import subprocess
 from datetime import datetime
 
 from flask import Flask, request, jsonify, render_template, abort
@@ -13,6 +14,7 @@ from flask import Flask, request, jsonify, render_template, abort
 import database as db
 import line_api
 import ai_service
+from ai_service import classify_intent
 import patrol
 import notify
 import heartbeat
@@ -202,6 +204,31 @@ def api_rag_search():
     })
 
 
+@app.route("/api/rag/rebuild", methods=["POST"])
+def api_rag_rebuild():
+    """重建知識庫索引"""
+    try:
+        # 使用 venv 的 python 完整路徑
+        venv_python = "/home/green-ai/line-monitor/venv/bin/python"
+        result = subprocess.run(
+            [venv_python, "scripts/build_kb_index.py"],
+            cwd="/home/green-ai/line-monitor",
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if result.returncode == 0:
+            # 清除 rag 快取
+            rag.clear_cache()
+            return jsonify({"ok": True, "message": "索引重建完成"})
+        else:
+            return jsonify({"ok": False, "error": f"重建失敗: {result.stderr}"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "重建逾時（>120秒）"}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"伺服器錯誤: {e}"}), 500
+
+
 @app.route("/api/notify/test", methods=["POST"])
 def api_notify_test():
     """測試指定通知通道連線"""
@@ -231,19 +258,19 @@ def api_send_message(msg_id):
     data = request.get_json(silent=True) or {}
     msg = db.get_message(msg_id)
     if not msg:
-        return jsonify({"error": "訊息不存在"}), 404
+        return jsonify({"ok": False, "error": "訊息不存在"}), 404
 
     text = data.get("text") or msg.get("ai_draft", "")
     if not text:
-        return jsonify({"error": "沒有可發送的內容"}), 400
+        return jsonify({"ok": False, "error": "沒有可發送的內容"}), 400
 
     success, resp = line_api.send_message(msg["user_id"], text)
     if success:
         db.resolve_message(msg_id, reply_by="admin")
-        return jsonify({"success": True, "response": resp})
+        return jsonify({"ok": True, "response": resp})
     else:
         db.update_message(msg_id, ai_draft=text)
-        return jsonify({"success": False, "error": resp}), 500
+        return jsonify({"ok": False, "error": resp}), 500
 
 
 @app.route("/api/messages/<int:msg_id>/resolve", methods=["POST"])
@@ -253,9 +280,9 @@ def api_resolve_message(msg_id):
     reply_by = data.get("reply_by", "admin")
     msg = db.get_message(msg_id)
     if not msg:
-        return jsonify({"error": "訊息不存在"}), 404
+        return jsonify({"ok": False, "error": "訊息不存在"}), 404
     db.resolve_message(msg_id, reply_by=reply_by)
-    return jsonify({"success": True})
+    return jsonify({"ok": True})
 
 
 @app.route("/api/messages/<int:msg_id>/draft", methods=["POST"])
@@ -293,6 +320,32 @@ def api_patrol_trigger():
     return jsonify({"success": True, "result": result})
 
 
+# ---------------------------------------------------------------------------
+# Contacts API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/contacts", methods=["POST"])
+def api_add_contact():
+    """新增聯繫人（管理員/操作人員）"""
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("user_id", "").strip()
+    name = data.get("name", "").strip()
+    role = data.get("role", "customer")
+    if not user_id or not name:
+        return jsonify({"ok": False, "error": "請輸入 userId 與姓名"}), 400
+    if role not in ("admin", "operator"):
+        return jsonify({"ok": False, "error": "角色必須為 admin 或 operator"}), 400
+    db.add_contact(user_id, name, role=role)
+    return jsonify({"ok": True, "message": f"已新增{role == 'admin' and '管理員' or '操作人員'}: {name}"})
+
+
+@app.route("/api/contacts/<user_id>", methods=["DELETE"])
+def api_remove_contact(user_id):
+    """移除聯繫人"""
+    db.delete_contact(user_id)
+    return jsonify({"ok": True, "message": "已移除"})
+
+
 @app.route("/api/settings", methods=["GET"])
 def api_get_settings():
     """取得設定"""
@@ -301,7 +354,7 @@ def api_get_settings():
 
 @app.route("/api/settings", methods=["POST"])
 def api_post_settings():
-    """更新設定"""
+    """更新設定：加入錯誤捕捉、移除 flat、統一回傳格式"""
     data = request.get_json(silent=True) or {}
     config = load_config()
     # 深度合併（支援巢狀 section dict 與扁平欄位兩種格式）
@@ -310,9 +363,13 @@ def api_post_settings():
             config[key].update(value)
         else:
             config[key] = value
-    save_config(config)
-    # 回傳扁平化設定，方便前端顯示
-    return jsonify({"success": True, "config": config, "flat": flatten_config(config)})
+    try:
+        save_config(config)
+        app.logger.info("Settings saved successfully")
+        return jsonify({"ok": True, "message": "儲存成功", "config": config})
+    except Exception as e:
+        app.logger.exception("Save settings failed")
+        return jsonify({"ok": False, "error": f"伺服器錯誤: {e}"}), 500
 
 
 def flatten_config(config, prefix=""):
@@ -330,8 +387,19 @@ def flatten_config(config, prefix=""):
 @app.route("/api/test-line", methods=["POST"])
 def api_test_line():
     """測試 LINE API 連線"""
-    success, message = line_api.test_connection()
-    return jsonify({"success": success, "message": message})
+    try:
+        config = load_config()
+        token = config.get("line", {}).get("channel_access_token", "")
+        app.logger.info(f"Test LINE connection - token prefix: {token[:10] if token else 'EMPTY'}")
+        success, message = line_api.test_connection()
+        app.logger.info(f"LINE test result: success={success}, msg={message}")
+        if success:
+            return jsonify({"ok": True, "message": message})
+        else:
+            return jsonify({"ok": False, "error": message})
+    except Exception as e:
+        app.logger.exception("Test LINE connection crashed")
+        return jsonify({"ok": False, "error": f"伺服器錯誤: {e}"}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +407,7 @@ def api_test_line():
 # ---------------------------------------------------------------------------
 
 @app.route("/webhook", methods=["POST"])
+@app.route("/line/webhook", methods=["POST"])
 def webhook():
     """LINE Messaging API Webhook 端點"""
     signature = request.headers.get("X-Line-Signature", "")
@@ -370,8 +439,12 @@ def webhook():
         profile = line_api.get_user_profile(user_id)
         user_name = profile.get("displayName", "") if profile else ""
 
+        # 意圖分類：只有詢問類訊息才標記為待回覆
+        intent = classify_intent(msg_text)
+        initial_status = "pending" if intent == "inquiry" else "resolved"
+
         # 存入 DB
-        db.add_message(user_id, user_name, msg_text)
+        db.add_message(user_id, user_name, msg_text, status=initial_status)
 
         # 若 contact 不存在則新增
         existing = db.get_contact(user_id)

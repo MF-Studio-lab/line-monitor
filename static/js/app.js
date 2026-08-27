@@ -24,7 +24,9 @@ async function saveSettings() {
     const payload = {
         line: {
             channel_access_token: document.getElementById('line_token')?.value || '',
-            webhook_url: document.getElementById('webhook_url')?.value || ''
+            channel_secret: document.getElementById('line_secret')?.value || '',
+            webhook_url: document.getElementById('webhook_url')?.value || '',
+            ngrok_url: document.getElementById('ngrok_url')?.value || ''
         },
         notification: {
             first_reminder_hours: parseInt(document.getElementById('reminder_1')?.value || 1),
@@ -105,6 +107,45 @@ async function testRag() {
         });
         toast(`檢索到 ${data.results.length} 筆`, 'success');
     } catch (e) { toast(e.message, 'error'); }
+}
+
+async function rebuildIndex() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '重建中...';
+    try {
+        const r = await fetch('/api/rag/rebuild', { method: 'POST' });
+        const data = await r.json();
+        if (data.success) {
+            toast(data.message || '索引重建完成', 'success');
+        } else {
+            toast(data.message || '重建失敗', 'error');
+        }
+    } catch (e) {
+        toast(e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '重建索引';
+    }
+}
+
+function applyNgrokUrl() {
+    const ngrokUrl = document.getElementById('ngrok_url')?.value?.trim();
+    if (!ngrokUrl) {
+        toast('請輸入 ngrok 基礎網址', 'error');
+        return;
+    }
+    // 確保以 https:// 開頭，移除尾部斜線
+    let base = ngrokUrl.replace(/\/+$/, '');
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+        base = 'https://' + base;
+    }
+    // 自動組成 webhook URL
+    const webhookUrl = base + '/line/webhook';
+    document.getElementById('webhook_url').value = webhookUrl;
+    // 同步儲存 ngrok_url 到設定
+    document.getElementById('ngrok_url').value = base;
+    toast(`已套用：${webhookUrl}`, 'success');
 }
 
 async function testLine() {
