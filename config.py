@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
         "channel_access_token": "",
         "channel_secret": "",
         "webhook_url": "",
+        "ngrok_url": "",
     },
     "notification": {
         "first_reminder_hours": 1,
