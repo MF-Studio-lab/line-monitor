@@ -85,7 +85,7 @@ def init_db():
 # Messages CRUD
 # ---------------------------------------------------------------------------
 
-def add_message(user_id, user_name, message_text, message_time=None):
+def add_message(user_id, user_name, message_text, message_time=None, status="pending"):
     """新增一筆訊息"""
     if message_time is None:
         message_time = datetime.now().isoformat()
@@ -93,8 +93,8 @@ def add_message(user_id, user_name, message_text, message_time=None):
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO messages (user_id, user_name, message_text, message_time, status)
-           VALUES (?, ?, ?, ?, 'pending')""",
-        (user_id, user_name, message_text, message_time),
+           VALUES (?, ?, ?, ?, ?)""",
+        (user_id, user_name, message_text, message_time, status),
     )
     msg_id = cursor.lastrowid
     conn.commit()

@@ -95,11 +95,24 @@ def patrol():
                 db.update_message(m["id"], ai_draft=draft)
 
         operators = db.get_operators()
+        # 建構包含 AI 草稿的詳細通知
+        detail_lines = []
+        for m in reminded_1_msgs:
+            draft = m.get("ai_draft") or "(生成中...)"
+            detail_lines.append(
+                f"👤 {m.get('user_name') or '客戶'}\n"
+                f"💬 客戶訊息：{m.get('message_text', '')[:100]}\n"
+                f"🤖 AI 建議回覆：\n{draft}\n"
+            )
+        detail_text = "\n---\n".join(detail_lines)
+
         content = (
             f"【第一次提醒 — {len(reminded_1_msgs)} 條待回覆訊息】\n"
             f"批次: {batch_id}\n\n"
             f"{summary}\n\n"
-            f"請儘速登入系統確認並回覆。"
+            f"📋 詳細內容與 AI 建議回覆：\n"
+            f"{detail_text}\n\n"
+            f"請儘速確認並回覆。"
         )
         for op in operators:
             success, _ = line_api.send_message(op["user_id"], content)
@@ -118,10 +131,23 @@ def patrol():
         operators = db.get_operators()
         admins = db.get_admins()
 
+        # 建構包含 AI 草稿的詳細通知
+        detail_lines = []
+        for m in reminded_2_msgs:
+            draft = m.get("ai_draft") or "(生成中...)"
+            detail_lines.append(
+                f"👤 {m.get('user_name') or '客戶'}\n"
+                f"💬 客戶訊息：{m.get('message_text', '')[:100]}\n"
+                f"🤖 AI 建議回覆：\n{draft}\n"
+            )
+        detail_text = "\n---\n".join(detail_lines)
+
         content = (
             f"【第二次提醒 — {len(reminded_2_msgs)} 條訊息仍待回覆】\n"
             f"批次: {batch_id}\n\n"
             f"{summary}\n\n"
+            f"📋 詳細內容與 AI 建議回覆：\n"
+            f"{detail_text}\n\n"
             f"操作人員請儘速處理，管理員請留意進度。"
         )
         targets = (operators + admins)
@@ -141,10 +167,23 @@ def patrol():
         admins = db.get_admins()
         admin_ids = [a["user_id"] for a in admins]
 
+        # 建構包含 AI 草稿的詳細通知
+        detail_lines = []
+        for m in escalated_msgs:
+            draft = m.get("ai_draft") or "(生成中...)"
+            detail_lines.append(
+                f"👤 {m.get('user_name') or '客戶'}\n"
+                f"💬 客戶訊息：{m.get('message_text', '')[:100]}\n"
+                f"🤖 AI 建議回覆：\n{draft}\n"
+            )
+        detail_text = "\n---\n".join(detail_lines)
+
         content = (
             f"【嚴重延遲 — {len(escalated_msgs)} 條訊息已超過 {esc_hr} 小時未回覆】\n"
             f"批次: {batch_id}\n\n"
             f"{summary}\n\n"
+            f"📋 詳細內容與 AI 建議回覆：\n"
+            f"{detail_text}\n\n"
             f"請管理員立即介入處理。"
         )
         # 高優先級：管理員 LINE + 其他已啟用通道，確保不看 LINE 也能收到

@@ -23,11 +23,28 @@
             <p class="text-xs text-gray-400 mt-1">LINE Official Account Manager → Settings → Messaging API → Channel Access Token</p>
         </div>
         <div>
+            <label class="text-sm font-medium text-gray-600 block mb-1">Channel Secret</label>
+            <input type="password" id="line_secret" value="{{ settings.line.channel_secret or '' }}" placeholder="LINE Developer Console → Basic Settings → Channel Secret"
+                class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
+        </div>
+        <div>
             <label class="text-sm font-medium text-gray-600 block mb-1">Webhook URL</label>
             <input type="text" id="webhook_url" value="{{ settings.line.webhook_url or '' }}" placeholder="https://xxx.ngrok.io/webhook"
                 class="w-full px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
             <p class="text-xs text-gray-400 mt-1">設定 ngrok 或 Cloudflare Tunnel 取得公網位址後填入</p>
         </div>
+        
+        <!-- ngrok 快速設定 -->
+        <div class="bg-blue-50 rounded p-4 border border-blue-100">
+            <h3 class="text-sm font-bold text-blue-800 mb-3">ngrok 快速設定</h3>
+            <div class="flex gap-2 mb-2">
+                <input type="text" id="ngrok_url" value="{{ settings.line.ngrok_url or '' }}" placeholder="https://xxxx.ngrok-free.app (ngrok 基礎網址，不含 /webhook)"
+                    class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-blue-400">
+                <button onclick="applyNgrokUrl()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">套用至 Webhook URL</button>
+            </div>
+            <p class="text-xs text-blue-600">ngrok 免費版每次重啟網址會變，複製 ngrok 顯示的 Forwarding HTTPS 網址貼上，點擊套用即自動產生完整 Webhook URL</p>
+        </div>
+        
         <div id="line-test-result" class="hidden text-sm p-2 rounded"></div>
     </div>
 </div>
@@ -101,6 +118,7 @@
                     class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
                 <button onclick="testChannel('discord')" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">測試</button>
             </div>
+            <p class="text-xs text-gray-400">取得方式：Discord 伺服器設定 → 整合 → 網路钩子 → 新增 Webhook → 複製 Webhook URL</p>
         </div>
 
         <!-- Telegram -->
@@ -116,6 +134,8 @@
                     class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
                 <button onclick="testChannel('telegram')" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">測試</button>
             </div>
+            <p class="text-xs text-gray-400">Bot Token 取得：向 @BotFather 發送 /newbot → 依指示建立 → 複製 Token</p>
+            <p class="text-xs text-gray-400">Chat ID 取得：將 Bot 加入群組/頻道 → 向 @userinfobot 或 @getidsbot 發送訊息 → 取得 Chat ID（群組為負數）</p>
         </div>
 
         <!-- Email -->
@@ -228,6 +248,7 @@
                 <input type="text" id="rag_test_q" placeholder="輸入問題，例如：PU灌注機保固多久？"
                     class="flex-1 px-3 py-2 border rounded text-sm focus:ring-2 focus:ring-green-400">
                 <button onclick="testRag()" class="bg-gray-200 px-4 py-2 rounded text-sm hover:bg-gray-300">檢索測試</button>
+                <button onclick="rebuildIndex()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">重建索引</button>
             </div>
             <div id="rag-test-result" class="hidden mt-2 text-sm space-y-2"></div>
         </div>
