@@ -165,11 +165,24 @@ def api_sla():
     mttr_hours, mttr_count = db.get_mttr(days=days)
     escalated = db.get_escalated_stats(days=days)
     resolved_lags = db.get_resolved_with_times(days=days)
+    
+    # 計算延遲分布
+    lag_buckets = {"0-1hr": 0, "1-3hr": 0, "3-6hr": 0, "6-12hr": 0, "12-24hr": 0, "24hr+": 0}
+    for r in resolved_lags:
+        h = r["lag_hours"]
+        if h <= 1: lag_buckets["0-1hr"] += 1
+        elif h <= 3: lag_buckets["1-3hr"] += 1
+        elif h <= 6: lag_buckets["3-6hr"] += 1
+        elif h <= 12: lag_buckets["6-12hr"] += 1
+        elif h <= 24: lag_buckets["12-24hr"] += 1
+        else: lag_buckets["24hr+"] += 1
+    
     return jsonify({
         "mttr_hours": mttr_hours,
         "mttr_count": mttr_count,
         "escalated": escalated,
         "resolved_count": len(resolved_lags),
+        "lag_distribution": lag_buckets,
     })
 
 
