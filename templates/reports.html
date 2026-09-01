@@ -65,11 +65,51 @@ async function loadSla() {
     document.getElementById('sla-escalated').textContent = data.escalated.escalated_count;
     document.getElementById('sla-rate').textContent = data.escalated.escalated_rate + '%';
 
+    // 延遲分布圖
+    if (data.lag_distribution) {
+        renderLagChart(data.lag_distribution);
+    }
+
     // 類別圖
     const cats = data.escalated.categories;
     const catLabels = Object.keys(cats).sort((a,b) => cats[b]-cats[a]);
     const catData = catLabels.map(k => cats[k]);
     renderCategory(catLabels, catData);
+}
+
+function renderLagChart(lagDist) {
+    const labels = ["0-1hr", "1-3hr", "3-6hr", "6-12hr", "12-24hr", "24hr+"];
+    const data = labels.map(l => lagDist[l] || 0);
+    
+    const ctx = document.getElementById('lagChart');
+    if (window.lagChartInstance) {
+        window.lagChartInstance.destroy();
+    }
+    window.lagChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '訊息筆數',
+                data: data,
+                backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                borderColor: '#36a2eb',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            plugins: { 
+                legend: { display: false }, 
+                title: { display: true, text: '已回覆訊息延遲分布' }
+            },
+            scales: { 
+                x: { beginAtZero: true, title: { display: true, text: '訊息筆數' } },
+                y: { title: { display: true, text: '延遲區間' } }
+            }
+        }
+    });
 }
 
 function renderCategory(labels, values) {
