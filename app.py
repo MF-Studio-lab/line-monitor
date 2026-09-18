@@ -7,6 +7,8 @@ Port: 8080
 import json
 import os
 import subprocess
+import threading
+import time
 from datetime import datetime
 
 from flask import Flask, request, jsonify, render_template, abort
@@ -19,12 +21,94 @@ import patrol
 import notify
 import heartbeat
 import rag
+import print_handler
 from config import load_config, save_config, validate_config
 
 app = Flask(__name__)
 
 # 啟動時初始化 DB
 db.init_db()
+
+# 用戶最後一則文字訊息快取（user_id -> text），用於圖片/檔案列印關鍵字判斷
+_user_last_text = {}
+_user_last_text_lock = threading.Lock()
+
+
+def _get_user_last_text(user_id):
+    with _user_last_text_lock:
+        return _user_last_text.get(user_id, "")
+
+
+def _set_user_last_text(user_id, text):
+    with _user_last_text_lock:
+        _user_last_text[user_id] = text
+
+
+# 事件去重快取：message_id -> timestamp（避免 LINE 重試導致重複處理）
+_processed_message_ids = {}
+_processed_message_ids_lock = threading.Lock()
+_MESSAGE_ID_TTL = 300  # 5 分鐘
+
+
+def _is_processed(message_id):
+    """檢查 message_id 是否已處理過，若無則標記為已處理並回傳 False"""
+    if not message_id:
+        return False
+    now = time.time()
+    with _processed_message_ids_lock:
+        # 清理過期
+        expired = [mid for mid, ts in _processed_message_ids.items() if now - ts > _MESSAGE_ID_TTL]
+        for mid in expired:
+            _processed_message_ids.pop(mid, None)
+        if message_id in _processed_message_ids:
+            return True
+        _processed_message_ids[message_id] = now
+        return False
+
+
+# 列印會話管理：user_id -> session dict
+# session: { "message_id": str, "message_type": str, "last_text": str, "created_at": float }
+_print_sessions = {}
+_print_sessions_lock = threading.Lock()
+_PRINT_SESSION_TTL = 300  # 5 分鐘
+
+
+def _create_print_session(user_id, message_id, message_type, last_text):
+    """建立列印會話，等待用戶輸入份數"""
+    with _print_sessions_lock:
+        _print_sessions[user_id] = {
+            "message_id": message_id,
+            "message_type": message_type,
+            "last_text": last_text,
+            "created_at": time.time(),
+        }
+
+
+def _get_print_session(user_id):
+    """取得用戶的列印會話（若過期則刪除並回傳 None）"""
+    with _print_sessions_lock:
+        session = _print_sessions.get(user_id)
+        if not session:
+            return None
+        if time.time() - session["created_at"] > _PRINT_SESSION_TTL:
+            _print_sessions.pop(user_id, None)
+            return None
+        return session
+
+
+def _pop_print_session(user_id):
+    """取得並移除用戶的列印會話"""
+    with _print_sessions_lock:
+        return _print_sessions.pop(user_id, None)
+
+
+def _clear_expired_print_sessions():
+    """清理過期會話"""
+    now = time.time()
+    with _print_sessions_lock:
+        expired = [uid for uid, s in _print_sessions.items() if now - s["created_at"] > _PRINT_SESSION_TTL]
+        for uid in expired:
+            _print_sessions.pop(uid, None)
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +500,61 @@ def api_test_line():
 
 
 # ---------------------------------------------------------------------------
+# Print API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/print/printers")
+def api_print_printers():
+    """取得可用印表機清單"""
+    try:
+        printers = print_handler.get_cups_printers()
+        cfg = print_handler.get_print_config()
+        return jsonify({
+            "printers": printers,
+            "default": cfg.get("default_printer"),
+            "enabled": cfg.get("enabled", True),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"伺服器錯誤: {e}"}), 500
+
+
+@app.route("/api/print/test", methods=["POST"])
+def api_print_test():
+    """測試列印"""
+    try:
+        data = request.get_json(silent=True) or {}
+        printer_hint = data.get("printer", "")
+        success, result = print_handler.test_print(printer_hint if printer_hint else None)
+        if success:
+            return jsonify({"ok": True, "message": "測試列印已送出", "result": result})
+        else:
+            return jsonify({"ok": False, "error": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"伺服器錯誤: {e}"}), 500
+
+
+@app.route("/api/print/config", methods=["GET"])
+def api_print_config_get():
+    """取得列印設定"""
+    return jsonify(print_handler.get_print_config())
+
+
+@app.route("/api/print/config", methods=["POST"])
+def api_print_config_post():
+    """更新列印設定"""
+    data = request.get_json(silent=True) or {}
+    config = load_config()
+    print_cfg = config.get("print", {})
+    print_cfg.update(data)
+    config["print"] = print_cfg
+    try:
+        save_config(config)
+        return jsonify({"ok": True, "message": "列印設定已更新", "config": print_handler.get_print_config()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"伺服器錯誤: {e}"}), 500
+
+
+# ---------------------------------------------------------------------------
 # LINE Webhook
 # ---------------------------------------------------------------------------
 
@@ -443,21 +582,12 @@ def webhook():
         user_id = src.get("userId", "")
         msg = event.get("message", {})
         msg_type = msg.get("type", "")
+        msg_id = msg.get("id", "")
         msg_text = msg.get("text", "")
-
-        if msg_type != "text":
-            continue
 
         # 取得用戶名稱
         profile = line_api.get_user_profile(user_id)
         user_name = profile.get("displayName", "") if profile else ""
-
-        # 意圖分類：只有詢問類訊息才標記為待回覆
-        intent = classify_intent(msg_text)
-        initial_status = "pending" if intent == "inquiry" else "resolved"
-
-        # 存入 DB
-        db.add_message(user_id, user_name, msg_text, status=initial_status)
 
         # 若 contact 不存在則新增
         existing = db.get_contact(user_id)
@@ -466,7 +596,99 @@ def webhook():
         elif not existing:
             db.add_contact(user_id, user_name, role="customer")
 
+        # 文字訊息：既有邏輯（意圖分類、SLA 監控）+ 記錄最後文字供圖片/檔案列印判斷
+        # 也處理列印會話中的份數輸入
+        if msg_type == "text":
+            _set_user_last_text(user_id, msg_text)
+
+            # 檢查是否有進行中的列印會話，且輸入為數字
+            session = _get_print_session(user_id)
+            if session and msg_text.strip().isdigit():
+                copies = int(msg_text.strip())
+                if copies < 1:
+                    line_api.send_message(user_id, "份數需大於 0，請重新輸入。")
+                elif copies > 9:
+                    line_api.send_message(user_id, "份數上限 9，請重新輸入。")
+                else:
+                    # 取出會話並執行列印
+                    session = _pop_print_session(user_id)
+                    if session:
+                        _execute_print_job(user_id, session, copies)
+                    else:
+                        line_api.send_message(user_id, "列印會話已過期，請重新傳送圖片/檔案。")
+                continue
+
+            # 一般文字訊息處理
+            intent = classify_intent(msg_text)
+            initial_status = "pending" if intent == "inquiry" else "resolved"
+            db.add_message(user_id, user_name, msg_text, status=initial_status)
+            continue
+
+        # 圖片/檔案訊息：檢查最後文字是否含「列印」關鍵字
+        if msg_type in ("image", "file"):
+            print_cfg = print_handler.get_print_config()
+            if not print_cfg.get("enabled", True):
+                continue
+            if msg_type not in print_cfg.get("allowed_types", ["image", "file"]):
+                continue
+
+            # 檢查關鍵字：使用用戶最後一則文字訊息
+            last_text = _get_user_last_text(user_id)
+            if "列印" not in last_text:
+                continue
+
+            # 檢查檔案大小（file 類型有 size 欄位）
+            max_size_mb = print_cfg.get("max_file_size_mb", 20)
+            file_size = msg.get("size", 0)
+            if file_size and file_size > max_size_mb * 1024 * 1024:
+                line_api.send_message(user_id, f"檔案過大 ({file_size/1024/1024:.1f}MB)，限制 {max_size_mb}MB")
+                continue
+
+            # 檢查副檔名（file 類型有 fileName）
+            file_name = msg.get("fileName", "")
+            if file_name:
+                ext = os.path.splitext(file_name)[1].lower()
+                allowed_exts = print_cfg.get("allowed_extensions", [".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".txt", ".md", ".docx"])
+                if ext not in allowed_exts:
+                    line_api.send_message(user_id, f"不支援的檔案格式: {ext}")
+                    continue
+
+            # 檢查使用者權限
+            if not print_handler.is_user_authorized(user_id):
+                line_api.send_message(user_id, "您無列印權限，僅限管理員/操作人員使用。")
+                continue
+
+            # 建立列印會話，詢問份數
+            _create_print_session(user_id, msg_id, msg_type, last_text)
+            line_api.send_message(user_id, "📄 收到列印檔案，請輸入列印份數 (1-9)：")
+
     return "OK", 200
+
+
+def _execute_print_job(user_id, session, copies):
+    """在背景執行緒執行列印工作"""
+    if _is_processed(session["message_id"]):
+        line_api.send_message(user_id, "該檔案已處理過，跳過列印。")
+        return
+
+    def _print_worker(uid, mid, mtype, hint, copy_count):
+        try:
+            success, result = print_handler.process_print_request(
+                user_id=uid,
+                message_id=mid,
+                message_type=mtype,
+                printer_hint=hint,
+                options={"copies": copy_count},
+            )
+            if success:
+                reply = f"✅ 列印已送出 ({copy_count}份)\n印表機: {result['printer']}\n工作 ID: {result['job_id']}"
+            else:
+                reply = f"❌ 列印失敗: {result.get('error', '未知錯誤')}"
+            line_api.send_message(uid, reply)
+        except Exception as e:
+            line_api.send_message(uid, f"❌ 列印處理錯誤: {e}")
+
+    threading.Thread(target=_print_worker, args=(user_id, session["message_id"], session["message_type"], session["last_text"], copies), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
