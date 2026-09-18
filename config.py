@@ -63,9 +63,20 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "max_stale_minutes": 60,
     },
+    "print": {
+        "enabled": True,
+        "default_printer": "Epson_L365_239_escpr",
+        "allowed_roles": ["admin", "operator"],
+        "allowed_types": ["image", "file"],
+        "max_file_size_mb": 20,
+        "allowed_extensions": [".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".txt", ".md", ".docx"],
+        "fit_to_page": True,
+        "media": "A4",
+        "scaling": 90,
+    },
     "company": {
         "name": "GREEN INDUSTRY CO., LTD.",
-        "display_name": "綠色產業股份有限公司",
+        "display_name": "綠的工業有限公司",
     },
     "server": {
         "port": 8080,
